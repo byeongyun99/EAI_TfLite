@@ -35,8 +35,8 @@ limitations under the License.
 
 using namespace std;
 
-#define MNIST_INPUT "/home/nayeon/EAI_TfLite/mnist_dataset/mnist_images"
-#define MNIST_LABEL "/home/nayeon/EAI_TfLite/mnist_dataset/mnist_labels"
+#define MNIST_INPUT "/home/byeongyun/EAI_TfLite/mnist_dataset/mnist_images"
+#define MNIST_LABEL "/home/byeongyun/EAI_TfLite/mnist_dataset/mnist_labels"
 
 #define TFLITE_MINIMAL_CHECK(x)                              \
   if (!(x)) {                                                \
@@ -131,7 +131,6 @@ int main(int argc, char* argv[]) {
     printf("\n");
   }
 
-
   std::unique_ptr<tflite::FlatBufferModel> model =
       tflite::FlatBufferModel::BuildFromFile(filename);
   TFLITE_MINIMAL_CHECK(model != nullptr);
@@ -184,6 +183,8 @@ int main(int argc, char* argv[]) {
   TFLITE_MINIMAL_CHECK(interpreter->Invoke() == kTfLiteOk); 
   printf("\n\n=== Post-invoke Interpreter State ===\n");
   tflite::PrintInterpreterState(interpreter.get());
+  
+
 
   // Read output buffers
   // TODO(user): Insert getting data out code.
