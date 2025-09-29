@@ -10,7 +10,7 @@ LDPATH := -L${HOME}/tensorflow/tensorflow/lite/tools/make/gen/bbb_armv7l/lib\
 
 SRCS := tpu_latency_cifar10.cc
 OBJS := $(SRCS:.cc=.o)
-EXEC := tpu_latency
+EXEC := tpu_latency_cifar10
 
 all: $(EXEC)
 
