@@ -65,7 +65,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  bool use_quantization = false;
   const char* filename = argv[1];
   bool use_tpu = std::stoi(argv[2]);
 
