@@ -132,14 +132,14 @@ int main(int argc, char* argv[]) {
     // TODO(user): Insert code to fill input tensors.
     // Note: The buffer of the input tensor with index `i` of type T can
     // be accessed with `T* input = interpreter->typed_input_tensor<T>(i);`
-    auto input_tensor = interpreter->typed_input_tensor<int8_t>(0);
+    auto input_tensor = interpreter->typed_input_tensor<uint8_t>(0);
     // Copy input in proper precision 
     for (int i=0; i<128; i++){
       for (int j=0; j<128; j++){   
         cv::Vec3b pixel = inputs[seq % 2].at<cv::Vec3b>(i , j);
-        *(input_tensor + i * 128*3 + j * 3) = ((int8_t)pixel[0]);
-        *(input_tensor + i * 128*3 + j * 3 + 1) = ((int8_t)pixel[1]);
-        *(input_tensor + i * 128*3 + j * 3 + 2) = ((int8_t)pixel[2]);
+        *(input_tensor + i * 128*3 + j * 3) = ((uint8_t)pixel[0]);
+        *(input_tensor + i * 128*3 + j * 3 + 1) = ((uint8_t)pixel[1]);
+        *(input_tensor + i * 128*3 + j * 3 + 2) = ((uint8_t)pixel[2]);
       }
     }
     // Get start time
@@ -156,7 +156,7 @@ int main(int argc, char* argv[]) {
     // TODO(user): Insert getting data out code.
     // Note: The buffer of the output tensor with index `i` of type T can
     // be accessed with `T* output = interpreter->typed_output_tensor<T>(i);`
-    auto output_tensor = interpreter->typed_output_tensor<int8_t>(0);
+    auto output_tensor = interpreter->typed_output_tensor<uint8_t>(0);
 
     // Output print
     // for(int i=0; i<10; ++i){
