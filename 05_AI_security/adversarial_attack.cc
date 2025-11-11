@@ -24,8 +24,6 @@ using namespace cv;
 const int   TARGET_SIZE = 320;          
 const float CONF_THRESH_DEFAULT = 0.3f;
 const float IOU_THRESH_DEFAULT  = 0.45f;
-const int   PRE_NMS_TOPK        = 300;
-const int   MAX_SHOW            = 100;
 // ------------------------------------------------
 
 static inline float sigmoidf(float x){ return 1.0f/(1.0f+expf(-x)); }
@@ -35,6 +33,7 @@ struct Detection {
     float score;
     int cls;
 };
+
 static float iou_box(const Detection &a, const Detection &b){
     float ax1 = a.x - a.w/2.0f, ay1 = a.y - a.h/2.0f, ax2 = a.x + a.w/2.0f, ay2 = a.y + a.h/2.0f;
     float bx1 = b.x - b.w/2.0f, by1 = b.y - b.h/2.0f, bx2 = b.x + b.w/2.0f, by2 = b.y + b.h/2.0f;
@@ -91,7 +90,7 @@ static vector<string> load_labels(const string &path){
     exit(1);                                                 \
   }
 
-static void letterbox_resize(
+static void letterbox_resize( //TARGET_SIZE에 맞게 비율 유지하며 resize
     const Mat& src_bgr,
     Mat& out_rgb,
     int target,
@@ -99,7 +98,7 @@ static void letterbox_resize(
     int &pad_x,
     int &pad_y
 ){
-    // convert to RGB first
+    // convert to RGB
     Mat src_rgb;
     cvtColor(src_bgr, src_rgb, COLOR_BGR2RGB);
 
@@ -116,22 +115,20 @@ static void letterbox_resize(
 
     // make padded canvas
     out_rgb = Mat::zeros(Size(target, target), CV_8UC3);
-    // we'll pad with 0 (black). that's fine for yolov8-style inference.
     pad_x = (target - new_w) / 2;
     pad_y = (target - new_h) / 2;
 
     // copy resized into center
     resized.copyTo(out_rgb(Rect(pad_x, pad_y, new_w, new_h)));
 
-    // export info
     scale = r;
 }
-static Rect box_to_orig_rect(
-    const Detection& d,
-    int orig_w, int orig_h,
-    float scale, int pad_x, int pad_y
+static Rect box_to_orig_rect( // 모델 예측 box를 원본 이미지 크기로 복원
+    const Detection& d, // 모델이 예측한 box
+    int orig_w, int orig_h, // 원본 이미지 크기
+    float scale, int pad_x, int pad_y // letterbox_resize에서 계산한 값
 ){
-    // d.x,d.y,d.w,d.h are normalized in [0..1] relative to TARGET_SIZE
+    // 모델 출력은 [0~1] 범위이므로, 320을 곱해 실제 픽셀 단위로 환산
     float cx_img = d.x * TARGET_SIZE;
     float cy_img = d.y * TARGET_SIZE;
     float w_img  = d.w * TARGET_SIZE;
@@ -142,14 +139,12 @@ static Rect box_to_orig_rect(
     float x2_img = cx_img + w_img/2.0f;
     float y2_img = cy_img + h_img/2.0f;
 
-    // undo padding: the model actually "saw" [pad_x:pad_x+new_w], [pad_y:pad_y+new_h]
-    // so shift by -pad
+    // padding 제거
     x1_img -= pad_x;
     y1_img -= pad_y;
     x2_img -= pad_x;
     y2_img -= pad_y;
 
-    // undo scaling: scale = orig -> resized factor, so divide to get back to orig
     if (scale > 0){
         x1_img /= scale;
         y1_img /= scale;
@@ -157,7 +152,7 @@ static Rect box_to_orig_rect(
         y2_img /= scale;
     }
 
-    // clamp to original image
+    // clamp
     int ix1 = std::max(0, (int)round(x1_img));
     int iy1 = std::max(0, (int)round(y1_img));
     int ix2 = std::min(orig_w-1, (int)round(x2_img));
@@ -171,11 +166,11 @@ int main(int argc, char** argv){
         cerr<<"Usage: "<<argv[0]<<" <model.tflite> <labels.txt> <input.jpg> <output.jpg> [use_tpu 0/1]\n";
         return 1;
     }
-    const char* filename = argv[1];
-    string labels_path   = argv[2];
-    string input_path    = argv[3];
-    string output_path   = argv[4];
-    bool use_tpu         = std::stoi(argv[5]);
+    const char* filename = argv[1]; //model
+    string labels_path   = argv[2]; //label 
+    string input_path    = argv[3]; //input image 
+    string output_path   = argv[4]; //output image
+    bool use_tpu         = std::stoi(argv[5]); //edgetpu(0/1)
 
     if(use_tpu){
         std::cout << "Use TPU acceleration" << "\n";
@@ -196,6 +191,7 @@ int main(int argc, char** argv){
     std::unique_ptr<tflite::Interpreter> interpreter;
     builder(&interpreter);
     TFLITE_MINIMAL_CHECK(interpreter != nullptr);
+    interpreter->SetNumThreads(1);
 
     // Setup for Edge TPU device
     if(use_tpu){
@@ -232,22 +228,21 @@ int main(int argc, char** argv){
     int pad_x = 0, pad_y = 0;
     letterbox_resize(orig_bgr, input_rgb, TARGET_SIZE, scale, pad_x, pad_y);
 
-    // Fill input tensor
     TfLiteTensor* in_t = interpreter->input_tensor(0);
     TfLiteType in_type = in_t->type;
-    float in_scale = in_t->params.scale;
-    int32_t in_zp = in_t->params.zero_point;
+    float in_scale = in_t->params.scale; //quantization scale
+    int32_t in_zp = in_t->params.zero_point; //zero point
 
-    if (in_type == kTfLiteFloat32){
+    if (in_type == kTfLiteFloat32){ //입력이 float32
         float* inptr = interpreter->typed_input_tensor<float>(0);
         Mat f;
         input_rgb.convertTo(f, CV_32FC3, 1.0f/255.0f);
         memcpy(inptr, f.data, sizeof(float)*TARGET_SIZE*TARGET_SIZE*3);
-    } else if (in_type == kTfLiteUInt8 || in_type == kTfLiteInt8){
+    } else if (in_type == kTfLiteUInt8 || in_type == kTfLiteInt8){ 
         Mat f;
         input_rgb.convertTo(f, CV_32FC3, 1.0f/255.0f);
 
-        if (in_type == kTfLiteUInt8){
+        if (in_type == kTfLiteUInt8){ //입력이 uint
             uint8_t* inptr = interpreter->typed_input_tensor<uint8_t>(0);
             size_t idx = 0;
             for (int y=0;y<TARGET_SIZE;++y){
@@ -255,12 +250,12 @@ int main(int argc, char** argv){
                     Vec3f px = f.at<Vec3f>(y,x);
                     for (int c=0;c<3;++c){
                         int q = (int)lround(px[c] / in_scale) + in_zp;
-                        q = max(0, min(255, q));
+                        q = max(0, min(255, q)); // [0, 255]
                         inptr[idx++] = (uint8_t)q;
                     }
                 }
             }
-        } else { // kTfLiteInt8
+        } else { //입력이 int
             int8_t* inptr = interpreter->typed_input_tensor<int8_t>(0);
             size_t idx = 0;
             for (int y=0;y<TARGET_SIZE;++y){
@@ -268,7 +263,7 @@ int main(int argc, char** argv){
                     Vec3f px = f.at<Vec3f>(y,x);
                     for (int c=0;c<3;++c){
                         int q = (int)lround(px[c] / in_scale) + in_zp;
-                        q = max(-128, min(127, q));
+                        q = max(-128, min(127, q)); // [-128, 127]
                         inptr[idx++] = (int8_t)q;
                     }
                 }
@@ -306,7 +301,7 @@ int main(int argc, char** argv){
     float out_scale = out_t->params.scale;
     int32_t out_zp  = out_t->params.zero_point;
 
-    auto read_val = [&](int ch, int box_idx)->float{
+    auto read_val = [&](int ch, int box_idx)->float{ //dequantization 
         if (out_type == kTfLiteFloat32){
             float* p = interpreter->typed_output_tensor<float>(0);
             return p[ch * (size_t)num_boxes + box_idx];
@@ -328,7 +323,7 @@ int main(int argc, char** argv){
     if (!has_objectness){
         cls_count = channels - 4;
     }
-    bool output_is_sigmoid = false;
+    bool output_is_sigmoid = false; 
     {
         int sample_count = min(100, num_boxes);
         int in_range_count = 0;
@@ -342,7 +337,6 @@ int main(int argc, char** argv){
         }
     }
 
-    // collect candidates
     vector<Detection> candidates;
     for (int j=0;j<num_boxes;j++){
         float bx = read_val(0, j);
@@ -360,14 +354,14 @@ int main(int argc, char** argv){
 
         int best_cls = -1;
         float best_prob = -1e9f;
-        for (int c=0;c<cls_count;c++){
+        for (int c=0;c<cls_count;c++){ //80 class
             float val = read_val(class_offset + c, j);
             float prob = output_is_sigmoid ? val : sigmoidf(val);
             if (prob > best_prob){ best_prob = prob; best_cls = c; }
         }
 
         float final_score = has_objectness ? (objectness * best_prob) : best_prob;
-        if (final_score <= CONF_THRESH_DEFAULT) continue;
+        if (final_score <= CONF_THRESH_DEFAULT) continue; 
         Detection d;
         d.x = bx; d.y = by; d.w = bw; d.h = bh;
         d.score = final_score; d.cls = best_cls;
@@ -378,25 +372,22 @@ int main(int argc, char** argv){
     sort(candidates.begin(), candidates.end(), [](const Detection&a,const Detection&b){
         return a.score > b.score;
     });
-    if ((int)candidates.size() > PRE_NMS_TOPK) candidates.resize(PRE_NMS_TOPK);
 
     // NMS per class
     vector<Detection> final_dets = nms_classwise(candidates, IOU_THRESH_DEFAULT);
 
-    if ((int)final_dets.size() > MAX_SHOW) final_dets.resize(MAX_SHOW);
-
     Mat output_bgr = orig_bgr.clone();
-    for (size_t i=0;i<final_dets.size();++i){
+    for (size_t i=0;i<final_dets.size();++i){ //visualization
         Detection &d = final_dets[i];
 
-        Rect box_on_orig = box_to_orig_rect(
+        Rect box_on_orig = box_to_orig_rect( //원본 이미지 좌표로 변환
             d,
             orig_bgr.cols, orig_bgr.rows,
             scale, pad_x, pad_y
         );
 
         Scalar col = color_for_class(d.cls);
-        rectangle(output_bgr, box_on_orig, col, 2);
+        rectangle(output_bgr, box_on_orig, col, 2); //bounding box
 
         string label = (d.cls >=0 && d.cls < (int)labels.size()) ? labels[d.cls] : to_string(d.cls);
         char buf[64]; snprintf(buf, sizeof(buf), "%.2f", d.score);
