@@ -6,6 +6,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include "tensorflow/lite/c/builtin_op_data.h"
 #include <string>
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
@@ -14,7 +16,6 @@
 
 #include "headers/edgetpu_c.h"
 #include "opencv2/opencv.hpp"
-
 
 using namespace std;
 using namespace cv;
@@ -115,7 +116,71 @@ void readImageCV(string filename, cv::Mat& input){
   
   input = cvimg;
 }
+namespace {
 
+TfLiteStatus LeakyInt8Prepare(TfLiteContext* ctx, TfLiteNode* node) {
+    const TfLiteTensor* input =
+        &ctx->tensors[node->inputs->data[0]];
+    TfLiteTensor* output =
+        &ctx->tensors[node->outputs->data[0]];
+
+    if (input->type != kTfLiteInt8 ||
+        output->type != kTfLiteInt8 ||
+        input->params.scale <= 0 ||
+        output->params.scale <= 0 ||
+        input->dims == nullptr) {
+        return kTfLiteError;
+    }
+
+    return ctx->ResizeTensor(
+        ctx, output, TfLiteIntArrayCopy(input->dims));
+}
+
+TfLiteStatus LeakyInt8Eval(TfLiteContext* ctx, TfLiteNode* node) {
+    const TfLiteTensor* input =
+        &ctx->tensors[node->inputs->data[0]];
+    TfLiteTensor* output =
+        &ctx->tensors[node->outputs->data[0]];
+
+    if (input->type != kTfLiteInt8 ||
+        output->type != kTfLiteInt8 ||
+        !node->builtin_data ||
+        input->params.scale <= 0 ||
+        output->params.scale <= 0 ||
+        output->bytes < input->bytes) {
+        return kTfLiteError;
+    }
+
+    const auto* params =
+        static_cast<const TfLiteLeakyReluParams*>(node->builtin_data);
+
+    const int n = input->bytes / sizeof(int8_t);
+
+    for (int i = 0; i < n; ++i) {
+        float x =
+            (static_cast<int>(input->data.int8[i]) -
+             input->params.zero_point) * input->params.scale;
+
+        float y = x >= 0 ? x : params->alpha * x;
+
+        long q = std::lround(y / output->params.scale)
+                 + output->params.zero_point;
+
+        q = std::max(-128L, std::min(127L, q));
+        output->data.int8[i] = static_cast<int8_t>(q);
+    }
+
+    return kTfLiteOk;
+}
+
+TfLiteRegistration* RegisterLeakyInt8() {
+    static TfLiteRegistration reg = {
+        nullptr, nullptr, LeakyInt8Prepare, LeakyInt8Eval
+    };
+    return &reg;
+}
+
+}  // namespace
 int main(int argc, char* argv[]) {
 
   if (argc != 4) {
@@ -143,6 +208,10 @@ int main(int argc, char* argv[]) {
 
   // Build the interpreter with the InterpreterBuilder.
   tflite::ops::builtin::BuiltinOpResolver resolver;
+  resolver.AddBuiltin(
+    tflite::BuiltinOperator_LEAKY_RELU,
+    RegisterLeakyInt8(),
+    1, 3);
   tflite::InterpreterBuilder builder(*model, resolver);
   std::unique_ptr<tflite::Interpreter> interpreter;
   builder(&interpreter);

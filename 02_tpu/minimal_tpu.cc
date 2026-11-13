@@ -17,11 +17,15 @@ limitations under the License.
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <cstdint>
+#include <cmath>
+#include <algorithm>
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/optional_debug_tools.h"
 #include "headers/edgetpu_c.h"
+
 
 // This is an example that is minimal to read a model
 // from disk and perform inference. There is no data being loaded
@@ -173,11 +177,28 @@ int main(int argc, char* argv[]) {
   // TODO(user): Insert code to fill input tensors.
   // Note: The buffer of the input tensor with index `i` of type T can
   // be accessed with `T* input = interpreter->typed_input_tensor<T>(i);`
+  
+  auto* input_tensor = interpreter->typed_input_tensor<int8_t>(0);
 
-  auto input_tensor = interpreter->typed_input_tensor<float>(0);
-  for(int i=0; i<28; ++i) // image rows
-    for(int j=0; j<28; ++j) // image cols
-      input_tensor[i * 28 + j] = input_vector[i][j] / 255.0; // normalize and copy input values.
+  const TfLiteTensor* input_info = interpreter->input_tensor(0);
+  float input_scale = input_info->params.scale;
+  int input_zero_point = input_info->params.zero_point;
+
+  TFLITE_MINIMAL_CHECK(input_scale > 0.0f);
+
+  for (int i = 0; i < 28; ++i) {
+      for (int j = 0; j < 28; ++j) {
+          float normalized = input_vector[i][j] / 255.0f;
+
+          int quantized = static_cast<int>(
+              std::round(normalized / input_scale)
+          ) + input_zero_point;
+
+          quantized = std::max(-128, std::min(127, quantized));
+
+          input_tensor[i * 28 + j] = static_cast<int8_t>(quantized);
+      }
+  }
   
   // Run inference
   TFLITE_MINIMAL_CHECK(interpreter->Invoke() == kTfLiteOk); 
@@ -191,10 +212,19 @@ int main(int argc, char* argv[]) {
   // Note: The buffer of the output tensor with index `i` of type T can
   // be accessed with `T* output = interpreter->typed_output_tensor<T>(i);`
 
-  auto output_tensor = interpreter->typed_output_tensor<float>(0);
+  auto* output_tensor = interpreter->typed_output_tensor<int8_t>(0);
 
-  for(int i=0; i<10; ++i)
-    printf("label : %d %.3f% \n", i, output_tensor[i] * 100); //ex. label : 0 12.345%
+  const TfLiteTensor* output_info = interpreter->output_tensor(0);
+  float output_scale = output_info->params.scale;
+  int output_zero_point = output_info->params.zero_point;
+
+  for (int i = 0; i < 10; ++i) {
+      float probability =
+          (static_cast<int>(output_tensor[i]) - output_zero_point)
+          * output_scale;
+
+      printf("label : %d %.3f%%\n", i, probability * 100.0f);
+  }
 
   
   return 0;

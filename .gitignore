@@ -1,0 +1,20 @@
+
+# Large YOLOv1 models
+/04_tpu_yolo/yolov1_int8.tflite
+/04_tpu_yolo/yolov1_int8_edgetpu.tflite
+
+# Compiled files
+*.o
+*.bak
+
+/02_tpu/minimal_tpu
+/03_tpu_latency/tpu_latency
+/03_tpu_latency_cifar10/tpu_latency_cifar10
+/04_tpu_yolo/tpu_detection_cpu
+/04_tpu_yolo/tpu_detection_tpu
+/05_AI_security/adversarial_attack_cpu
+/05_AI_security/adversarial_attack_tpu
+
+# Temporary files
+.ipynb_checkpoints/
+__pycache__/
